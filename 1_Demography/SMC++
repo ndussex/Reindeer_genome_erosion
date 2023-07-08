@@ -1,0 +1,45 @@
+##########################
+## 1. Run smc++ vcf2smc ##
+##########################
+
+module load bioinfo-tools SMC++/1.15.4 bcftools biopython htslib tabix BEDTools/2.29.2
+
+#make a chromosome list, 1 column list
+chrom_list.txt
+
+## ADV
+#################
+merged_vcf="Reindeer.vcf.gz"
+Pop_ADV="ADV:Ind1,Ind2,Ind3,Ind4,Ind5,Ind6,Ind7"
+
+while read -a line
+do
+  for i in Ind1 Ind2 Ind3 Ind4 Ind5 Ind6 Ind7
+  do 
+  smc++ vcf2smc --cores 24 --ignore-missing --drop-first-last -d $i $i -c 1000000 $merged_vcf results_pairs/ADV.smc.$i.${line[0]}.txt ${line[0]} $Pop_ADV
+  done
+done < chrom_list.txt
+
+
+#######################
+## 2. Run smc++      ##
+#######################
+
+#2.1 estimation #
+#######################
+
+smc++ est --base ADV -o analysis_est/ 1.1e-8 results_pairs/ADV* -c 1000000 --timepoints 1e3 1e6 --em-iterations 5000 --thinning 1300 --regularization-penalty 6  --ftol 1e-7 --xtol 1e-7 
+
+
+
+#2.2 cross-validation #
+#######################
+
+smc++ cv --base ADV -o analysis_cv/ 1.1e-8 results_pairs/ADV* -c 1000000 --timepoints 1e3 1e6 --em-iterations 5000 --thinning 1300 --regularization-penalty 6  --ftol 1e-7 --xtol 1e-7 
+
+
+#######################
+## 3. Plot           ##
+#######################
+
+smc++ plot plot.png analysis/*.final.json  -g 7 --xlim 1 50000
