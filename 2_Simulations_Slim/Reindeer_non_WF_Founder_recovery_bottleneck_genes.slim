@@ -1,0 +1,383 @@
+// set up a simple neutral nonWF simulation
+///////////////////////////////////////////////////////////////////
+
+// Initialise constant values
+// those constants are not read when running it on the command line, they have to be giveen as input (-d argument) in the command
+// see 'Launch_simulations.slim. 
+
+initialize() {
+	if (exists("slimgui")) {
+		defineConstant("K1", 50000);// carrying capacity //use 50-100K
+		defineConstant("K2", 1000);	// carrying capacity //use 10, 5, 1K
+		defineConstant("K3", 10000);     // carrying capacity recovery post colonisation //use 10K
+		defineConstant("K_bot", 500); // 1800 - 500
+	}
+	////////////////////////////////////////////////////
+	//	1. Initialise genomic elements //////////////////
+	////////////////////////////////////////////////////
+	
+	initializeSLiMModelType("nonWF");
+	initializeSex("A");
+	defineConstant("geneLength", 1750);
+	defineConstant("K_recovery", 20000);
+
+  //Chen 2019: 1.06E−8 (Chen et al., 2019) per gen -> for a  generation time = 6 years -> 1.76667E-09 / year 
+	initializeMutationRate(1.76e-9); 
+
+	//draw deleterious mutations from Kim 2017 human DFE
+	//and allow for different dominance coefficients for mutations with different s
+	//by creating different mutation types (faster than fitness callbacks)	
+	
+	defineConstant("h_VstrDel", 0.0);
+	defineConstant("h_strDel", 0.01);
+	defineConstant("h_modDel", 0.1);
+	defineConstant("h_wkDel", 0.4);
+	
+	defineConstant("sampleSize", 20);
+	defineConstant("Out", "Reindeer_" + "K2="+ K2 +"_"+ "Kbot="+ K_bot +"_"+ getSeed() );
+	
+	//very strongly deleterious mutations (s<-0.1)
+	initializeMutationType("m1", h_VstrDel, "s", "do x=rgamma(1,-0.01314833,0.186); while (x >= -0.1); return x;");
+	m1.convertToSubstitution = F;
+	//strongly deleterious mutations (s<-0.01)
+	initializeMutationType("m2", h_strDel, "s", "do x=rgamma(1,-0.01314833,0.186); while (x < -0.1 | x >= -0.01); return x;");
+	m2.convertToSubstitution = F;
+	//moderately deleterious mutations (-0.001 > s >= -0.01)
+	initializeMutationType("m3", h_modDel, "s", "do x=rgamma(1,-0.01314833,0.186); while (x < -0.01 | x >= -0.001); return x;");
+	m3.convertToSubstitution = F;
+	//weakly deleterious mutations (s >= -0.001)
+	initializeMutationType("m4", h_wkDel, "s", "do x=rgamma(1,-0.01314833,0.186); while (x < -0.001); return x;");
+	m4.convertToSubstitution = F;
+	//lethal mutations
+	initializeMutationType("m5", 0.0,"f",-1.0);
+	m5.convertToSubstitution = F;
+	//neutral mutations
+	initializeMutationType("m6", 0.5,"f",0.0);
+	m6.convertToSubstitution = T;
+	
+	//from vaquita (Robinson et al. 2023)
+	//number of genes on each autosome
+	initializeGenomicElementType("g1", c(m1,m2,m3,m4,m5,m6), c(2.6, 23.6, 24.7, 49.1, 0.5, 43.3));
+	
+	gene_vec=c(500,500,500,500,500,500,500,500,500,500) ;
+	
+	defineConstant("seqLength", sum(gene_vec)*geneLength);
+	
+	gene_num=sum(gene_vec);
+	
+	for (i in 1:gene_num){
+		initializeGenomicElement(g1, ((i-1)*geneLength)+(i-1), (i*geneLength)+(i-2) );
+	}
+	
+	rates=NULL;
+	
+	//assume no recombination within genes, a rate of 1e-3 between genes, and free recombination between chroms
+	for (i in 1:(size(gene_vec)-1)){
+		rates=c(rates, 0, rep(c(1e-3, 0), asInteger(gene_vec[i-1]-1)), 0.5);
+	}
+	rates=c(rates, 0, rep(c(1e-3, 0), asInteger(gene_vec[size(gene_vec)-1]-1)));
+	
+	ends=NULL;
+	for (i in 1:gene_num){
+		ends=c(ends, (i*geneLength)+(i-2), (i*geneLength)+(i-1));
+	}
+	ends=ends[0:(size(ends)-2)];
+	
+	initializeRecombinationRate(rates, ends);
+
+}
+
+/////////////////////////////////
+//2. Demographic model //////////
+/////////////////////////////////
+
+
+//2.1 Create a large ancestral population
+////////////////////////////////////////////////////////////////
+1 early() {
+	sim.addSubpop("p1", 500).setValue("K", K1);
+	// info of contemporary age distribution?
+	p1.individuals.age = rdunif(500, min=0, max=13);
+}
+
+
+//2.1.1 Reproduction for ancestral population
+///////////////////////////////////////////////////////////////////
+
+// Give weights to male reproduction (i.e. prop of males that have 1 to X progeny)
+// Røed et al. 2010 - approx. based on Fig.1
+reproduction(p1) {
+	// get males and females and randomize their order
+	//males = subpop.subsetIndividuals(sex="M");
+	males = subpop.sampleIndividuals(asInteger(sum(subpop.individuals.sex == "M")*0.5), sex="M", minAge=1,maxAge=12);
+	males = sample(males, size(males), replace=F);
+	females = subpop.subsetIndividuals(sex="F");
+	females = sample(females, size(females), replace=F);
+	femaleCount = size(females);
+	// draw number of offspring for males, assuming dominance
+	offspringCounts = sample(1:8, size(males), replace=T, weights=c(0.52,0.26,0.11,0.04,0.02,0.01,0.01,0.04));
+	// go through the males until we run out of females
+	// males that are left without mates are non-dominant
+	nextFemaleIndex = 0;
+	males.tag = 0;
+	for (maleIndex in seqAlong(males))
+	{
+		male = males[maleIndex];
+		offspringCount = offspringCounts[maleIndex];
+		for (i in seqLen(offspringCount))
+		{
+			if (nextFemaleIndex < femaleCount)
+			{
+				offspring = subpop.addCrossed(females[nextFemaleIndex], male);
+				nextFemaleIndex = nextFemaleIndex + 1;
+				male.tag = male.tag + 1;
+			}
+			else
+			{
+				// disable this callback for this cycle
+				self.active = 0;
+				return;
+			}
+		}
+	}
+	// disable this callback for this cycle
+	self.active = 0;
+}
+
+// 2.1.2 Age-related mortality and density-dependent selection for p1
+///////////////////////////////////////////////////////////////////
+//lifepsan: 10 years; max recorded: 17
+
+early() {
+	for (s in sim.subpopulations)
+	{
+		//Hansen pers. comm.
+		//0.01 for females, no info on males; 0.05 to be conservative
+		L= c(0.2, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.74, 1.0);
+		inds = s.individuals;
+		ages = inds.age;
+		mortality = L[ages];
+		survival = 1 - mortality;
+		inds.fitnessScaling = survival;
+		
+		K = s.getValue("K");
+		inds = s.individuals;
+		//s.fitnessScaling = K / sum(inds.fitnessScaling); // seems to stay closer to the K I want
+		
+		//from vaquita paper, to avoid fitness of all individuals increasing to 1 in case of severe decline and to include viability selection and impacts of inbreeding depression i(Robinson et al. 2022)
+		s.fitnessScaling = min(K /(s.individualCount * mean(survival)), 1.0);
+		s.individuals.tagF = inds.fitnessScaling*s.fitnessScaling;
+	
+	}
+}
+
+
+// 2.2 Founder effect for Svalbard  ~7000 years ago
+///////////////////////////////////////////////////
+
+// the bottlenecked population after 500000 cycles of burnin
+// consider running it independently, save it and reload it
+///////////////////////////////////////////////////////////////////
+// need to specify the sex such as: p1.sampleIndividuals(4, sex="F", minAge=2)
+
+
+// 2.2.1 Founder event (original bottleneck)
+///////////////////////////////////////////////////////////////////
+
+//7000 years BP
+500000 late() {
+	p1.setValue("K", K2); // founder bottleneck for Svalbard
+}
+
+//6000 years BP
+500100 late() {
+        p1.setValue("K", 1000); // recovery after founder bottleneck
+}
+
+
+//1,200 years BP  recovery to 10'000 (based on GONE reconstruction)
+505800:506799 late() {
+	p1.setValue("K", K3); 
+}
+
+
+// 2.2.2 Botleneck ~200 years BP
+////////////////////////////////
+
+//~1800-1925 
+506800:506925 early() {
+	p1.setValue("K", K_bot); // bottlneck for Svalbard
+}
+
+// 2.2.3 recovery ~20000
+////////////////////////////////
+
+//~1925
+506926:507020 early() {
+	p1.setValue("K", K_recovery); // bottlneck for Svalbard
+}
+
+
+////////////////////////
+//3. Logs and Stats ////
+////////////////////////
+
+//3.1 stats on screen for P1 - also output in slurm_jobxxx.out
+////////////////////////////
+
+1 early () {
+	//	
+	cat("Year,popSizeP1,FitnessP1,meanHetP1,B_P1,FROHP1,avgvStrDelP1,avgStrDelP1,avgModDelP1,avgWkDelP1,avgNeutP1"+ "\n");
+}
+
+// record statistics every 1,000 generations during burn in (NAN for fitness if called in 'early' event)
+1000:507020 late() {
+	if (sim.cycle % 10 == 0){
+		stats = getStats(p1, sampleSize); //asInteger(p1.individuals.size()*0.8)
+		cat(sim.cycle + "," + p1.individuals.size() + "," + stats + "\n");
+	}
+}
+
+
+//3.2 Create output for post-processing in R
+////////////////////////////////////////////
+
+1 early() {
+	HEAD = "Year,popSizeP1,FitnessP1,meanHetP1,B_P1,FROHP1,avgvStrDelP1,avgStrDelP1,avgModDelP1,avgWkDelP1,avgNeutP1,Seed";
+	
+	writeFile(Out,HEAD,append=F);
+}
+
+// record statistics every xx cycles
+500000:507020 late() {
+	if (sim.cycle % 10 == 0){
+		stats1 = getStats(p1, sampleSize);
+		//cat(sim.cycle + "," + p1.individuals.size() + "\n");
+		line=paste(c(sim.cycle + "," + size(p1.individuals) + "," + stats1 + K_bot + "," + getSeed()));
+		writeFile(Out,line,append=T);
+	}
+}
+
+////////////////////////////
+//4. functions /////////////
+////////////////////////////
+// define function to sample a population for
+// mean fitness, heterozygosity, mean Froh, 
+// and avg num of mutations of different classes per individual (very str del, str del, mod del, wk del)
+function (s) getStats(o pop, i sampSize)
+{
+	i = sample(pop.individuals, sampSize, F);
+	
+	m = sortBy(i.genomes.mutations, "position"); //get all mutations in sample
+	m_uniq = unique(m); // get rid of redundant muts
+	DAF = sapply(m_uniq, "sum(m == applyValue);"); // count number of each mut in pop
+	m_uniq_polym = m_uniq[DAF != i.genomes.size()]; //remove fixed mutations??
+	
+	//initialize vectors
+	ROH_length_sumPerInd_10Mb = c();
+	ROH_length_sumPerInd_1Mb = c();
+	ROH_length_sumPerInd_500Kb = c();
+	ROH_length_sumPerInd_100Kb = c();
+	Num_vStrDel_muts = c();
+	Num_strDel_muts = c();
+	Num_modDel_muts = c();
+	Num_wkDel_muts = c();
+	Num_neut_muts = c();
+	ind_het = c();
+	B_pop = c();
+	
+	for (individual in i) {
+		
+		indm = sortBy(individual.genomes.mutations, "position");
+		indm = indm[match(indm, m_uniq_polym) >= 0];   // Check that individual mutations are not fixed 
+		indm_uniq = unique(indm);
+		
+		genotype = sapply(indm_uniq, "sum(indm == applyValue);");
+		
+		// tally number of mutations for different classes of selection coefficient per individual
+		s = individual.genomes.mutations.selectionCoeff;
+		
+		Num_vStrDel_muts = c(Num_vStrDel_muts, sum(s<=-0.1));
+		Num_strDel_muts = c(Num_strDel_muts, sum(s<=-0.01));
+		Num_modDel_muts = c(Num_modDel_muts, sum(s<=-0.001 & s > -0.01));
+		Num_wkDel_muts = c(Num_wkDel_muts, sum(s<=-0.00001 & s > -0.001));
+		Num_neut_muts = c(Num_neut_muts, sum(s==0.0));
+		
+		if (isNULL(genotype)) {
+			ind_het = c(ind_het, 0); //putting this here to avoid error when trying to sum null vector
+			next;
+		}
+		
+		ind_het = c(ind_het, sum(genotype==1)/(seqLength));
+		
+		//code for getting ROHs 
+		
+		ID_het = (genotype == 1); //outputs T/F for genotypes if they are het or homDer
+		ID_homDer = (genotype == 2);
+		pos_het = indm_uniq.position[ID_het]; //outputs positions of heterozgoys genotypes
+		
+		startpos = c(0, pos_het); //adds 0 to beggining of vector of hets
+		endpos = c(pos_het, sim.chromosome.lastPosition); //adds last position in genome to vector of hets
+		pos_het_diff = endpos - startpos;
+		
+		
+		//sum for ROHs > 10Mb
+		ROH_startpos_10Mb = startpos[pos_het_diff > 10000000]; //filter out startpos that dont correspond to ROH > 10Mb
+		ROH_endpos_10Mb = endpos[pos_het_diff > 10000000];
+		ROH_length_10Mb = pos_het_diff[pos_het_diff > 10000000]; //vector of ROHs for each individual
+		ROH_length_sum_10Mb = sum(ROH_length_10Mb);
+		ROH_length_sumPerInd_10Mb = c(ROH_length_sumPerInd_10Mb, ROH_length_sum_10Mb); // add sum of ROHs for each individual to vector of ROHs for all individuals
+		
+		//sum for ROHs > 1Mb
+		ROH_startpos_1Mb = startpos[pos_het_diff > 1000000]; //filter out startpos that dont correspond to ROH > 1Mb
+		ROH_endpos_1Mb = endpos[pos_het_diff > 1000000];
+		ROH_length_1Mb = pos_het_diff[pos_het_diff > 1000000]; //vector of ROHs for each individual	
+		ROH_length_sum_1Mb = sum(ROH_length_1Mb);
+		ROH_length_sumPerInd_1Mb = c(ROH_length_sumPerInd_1Mb, ROH_length_sum_1Mb); // add sum of ROHs for each individual to vector of ROHs for all individuals
+		
+		//sum for ROHs > 500kb
+		ROH_startpos_500Kb = startpos[pos_het_diff > 500000]; //filter out startpos that dont correspond to ROH > 500 Kb
+		ROH_endpos_500Kb = endpos[pos_het_diff > 500000];
+		ROH_length_500Kb = pos_het_diff[pos_het_diff > 500000]; //vector of ROHs for each individual	
+		ROH_length_sum_500Kb = sum(ROH_length_500Kb);
+		ROH_length_sumPerInd_500Kb = c(ROH_length_sumPerInd_500Kb, ROH_length_sum_500Kb); // add sum of ROHs for each individual to vector of ROHs for all individuals
+		
+		
+		//sum for ROHs > 100kb
+		ROH_startpos_100Kb = startpos[pos_het_diff > 100000]; //filter out startpos that dont correspond to ROH > 100 Kb
+		ROH_endpos_100Kb = endpos[pos_het_diff > 100000];
+		ROH_length_100Kb = pos_het_diff[pos_het_diff > 100000]; //vector of ROHs for each individual
+		ROH_length_sum_100Kb = sum(ROH_length_100Kb);
+		ROH_length_sumPerInd_100Kb = c(ROH_length_sumPerInd_100Kb, ROH_length_sum_100Kb); // add sum of ROHs for each individual to vector of ROHs for all individuals
+		
+		//calculate 2B (inbreeding load)
+		del_muts = c(individual.genomes.mutationsOfType(m1),individual.genomes.mutationsOfType(m2),individual.genomes.mutationsOfType(m3),individual.genomes.mutationsOfType(m4),individual.genomes.mutationsOfType(m5));
+		B_ind = c();
+		
+		if (del_muts.length()>0) {
+			for(m in del_muts){
+				//check if mut is heterozygous
+				if(individual.genomes.mutationCountsInGenomes(m)==1){
+					
+					//protect against case where s < -1 (can happen with gamma DFE)
+					s = max(m.selectionCoeff,-1.0);
+					//difference in fitness between het and hom is s*(h-1) (1+sh -(1+s))
+					B_ind = c(B_ind, s*(m.mutationType.dominanceCoeff-1));
+					//catn(m.id + "," +  m.selectionCoeff + "," + m.selectionCoeff*(m.mutationType.dominanceCoeff-1));
+				}
+			}
+			
+			if(isNULL(B_ind)){
+				B_pop = c(B_pop, 0.0);
+			}
+			// this is summed rather than multiplied
+			//even if fitness is multiplicative
+			else{
+				B_pop = c(B_pop, sum(B_ind));
+			}
+		
+		}
+	
+	}	
+	return(mean(pop.cachedFitness(NULL)/pop.individuals.tagF)+ "," + mean(ind_het) + ","  + mean(B_pop) + "," + mean(ROH_length_sumPerInd_100Kb)/seqLength + "," + mean(Num_vStrDel_muts) + "," + mean(Num_strDel_muts)+ "," + mean(Num_modDel_muts) + "," + mean(Num_wkDel_muts) + "," + mean(Num_neut_muts));
+}
