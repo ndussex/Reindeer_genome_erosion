@@ -1,1 +1,10 @@
-xxxxxxxx
+module load bioinfo-tools SMC++/1.15.4
+
+
+smc++ estimate --base NovZ -o NovZ_boot/ 1.06e-8 NovZ.* -c 100000 --polarization-error 0.5  --ftol 1e-7 --xtol 1e-7 --thinning 1300 --em-iterations 1000 
+
+smc++ estimate --base SVA -o SVA_boot/ 1.06e-8 SVA.* -c 1000000 --polarization-error 0.5  --ftol 1e-7 --xtol 1e-7 --thinning 1300 --em-iterations 1000 
+
+
+smc++ split -o NovZ_SVA_boot NovZ_boot/NovZ.final.json SVA_boot/SVA.final.json *.smc*gz -c 1000000 --thinning 1300 --em-iterations 10000  --regularization-penalty 6 --polarization-error 0.5 --ftol 1e-7 --xtol 1e-7
+smc++ plot NovZ_SVA_joint_years_boot.pdf NovZ_SVA_boot/model.final.json -g 6 --xlim 1 500000 -c 
