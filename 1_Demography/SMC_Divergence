@@ -37,15 +37,11 @@ LINES=$(cat chrom_list.txt)
 LINES=$(cat chrom_list.txt)
 	for i in $LINES
 	do
-	smc++ vcf2smc "$myvcf" results_divergence_Pop1_Pop2/"Pop1_Pop2.smc_"$i".gz" "$i" "$Pop2" "$Pop1" --ignore-missing -c 1000000
+	smc++ vcf2smc "$myvcf" results_divergence_Pop1_Pop2/"Pop2_Pop1.smc_"$i".gz" "$i" "$Pop2" "$Pop1" --ignore-missing -c 1000000
 	done
 
-
-
->>>>>>> Copy the data to: bootstrap_split_Pop1_Pop2
->>>>>>>
->>>>>>>
-
+#Make a directory for bootstrap runs
+mkdir bootstrap_split_Pop1_Pop2
 
 # a. copy data from original dir to first bootstrap dir: results_divergence_RU_SVA_boot_data
 
@@ -58,8 +54,8 @@ mkdir results_divergence_Pop1_Pop2_boot_data/
 
 # b. sample randomly 5 chromosomes of of 10 from results_divergence_Pop1_Pop2_boot_data and create 50 dir at the same time
 
-suffixes=("056679.1" "056680.1" "056681.1" "056682.1" "056683.1") #suffix of the chromosome in the format: NC056679.1, and so on.
-num_directories=2  # Number of directories/bootstraps to create (2 in this case)
+suffixes=("056679.1" "056680.1" "056681.1" "056682.1" "056683.1") #suffix of the chromosome in the format: NC056679.1, and so on. Edit according to your chromosome names
+num_directories=49  # Number of directories/bootstraps to create (50 in this case)
 
 source_directory="results_divergence_Pop1_Pop2_boot_data"
 
@@ -161,3 +157,5 @@ for source_dir in "${source_dirs[@]}"; do
     counter=$((counter + 1))
   done
 done
+
+#export data for stats and plotting in R
